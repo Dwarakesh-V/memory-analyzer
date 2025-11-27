@@ -1,0 +1,17 @@
+[package]
+name = "memory-analyzer-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+memory-analyzer-common = { path = "../memory-analyzer-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "memory-analyzer"
+path = "src/main.rs"
