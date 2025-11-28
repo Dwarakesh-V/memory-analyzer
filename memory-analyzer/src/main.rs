@@ -1,7 +1,17 @@
+use aya::maps::RingBuf;
 use aya::programs::KProbe;
 #[rustfmt::skip]
 use log::{debug, warn};
 use tokio::signal;
+use std::time::Duration;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PageFaultEvent {
+    pub pid: u32,
+    pub addr: u64,
+    pub flags: u32,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -43,14 +53,40 @@ async fn main() -> anyhow::Result<()> {
             });
         }
     }
+    
     let program: &mut KProbe = ebpf.program_mut("memory_analyzer").unwrap().try_into()?;
     program.load()?;
-    program.attach("__x64_sys_mmap", 0)?;
+    program.attach("handle_mm_fault", 0)?;
+    
+    println!("eBPF program attached to handle_mm_fault");
+    println!("Monitoring page faults... Press Ctrl-C to exit\n");
+
+    // Get the ring buffer
+    let mut ringbuf = RingBuf::try_from(ebpf.take_map("EVENTS").unwrap())?;
+
+    // Spawn a task to read from the ring buffer
+    let reader_task = tokio::task::spawn(async move {
+        loop {
+            while let Some(item) = ringbuf.next() {
+                let event = unsafe {
+                    std::ptr::read_unaligned(item.as_ptr() as *const PageFaultEvent)
+                };
+                println!(
+                    "Page fault: PID={:5}, Address=0x{:016x}, Flags=0x{:x}",
+                    event.pid, event.addr, event.flags
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
 
     let ctrl_c = signal::ctrl_c();
-    println!("Waiting for Ctrl-C...");
-    ctrl_c.await?;
-    println!("Exiting...");
+    tokio::select! {
+        _ = ctrl_c => {
+            println!("\nExiting...");
+        }
+        _ = reader_task => {}
+    }
 
     Ok(())
 }
